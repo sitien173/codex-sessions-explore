@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { RawEvent, EventMsg, ResponseItem } from '../lib/types'
+import type { TocEntry } from './TableOfContents'
 
 interface EventTimelineProps {
     events: RawEvent[]
+    onTocEntries?: (entries: TocEntry[]) => void
 }
 
 function formatTimestamp(ts: string | undefined): string {
@@ -49,9 +51,13 @@ interface TimelineEventCardProps {
     event: RawEvent
     index: number
     isLast: boolean
+    /** If set, render this as an anchor for the TOC */
+    anchor?: string
+    /** 1-based user message number, shown as a badge */
+    userMsgNum?: number
 }
 
-function TimelineEventCard({ event, index, isLast }: TimelineEventCardProps) {
+function TimelineEventCard({ event, index, isLast, anchor, userMsgNum }: TimelineEventCardProps) {
     const ts = (event as { timestamp?: string }).timestamp
     const delay = `${Math.min(index, 30) * 25}ms`
 
@@ -62,7 +68,11 @@ function TimelineEventCard({ event, index, isLast }: TimelineEventCardProps) {
 
         if (p.type === 'user_message' && p.message) {
             return (
-                <div className="timeline-event" style={{ animationDelay: delay }}>
+                <div
+                    id={anchor}
+                    className="timeline-event"
+                    style={{ animationDelay: delay, scrollMarginTop: '80px' }}
+                >
                     <div className="timeline-event__spine">
                         <div className="timeline-event__dot timeline-event__dot--user" />
                         {!isLast && <div className="timeline-event__line" />}
@@ -70,6 +80,11 @@ function TimelineEventCard({ event, index, isLast }: TimelineEventCardProps) {
                     <div className="timeline-event__body">
                         <div className="timeline-event__header">
                             <span className="event-role event-role--user">User</span>
+                            {userMsgNum !== undefined && (
+                                <span className="event-msg-num" title={`User message #${userMsgNum}`}>
+                                    #{userMsgNum}
+                                </span>
+                            )}
                             <span className="event-time">{formatTimestamp(ts)}</span>
                         </div>
                         <div className="event-bubble event-bubble--user">{p.message}</div>
@@ -195,16 +210,7 @@ function TimelineEventCard({ event, index, isLast }: TimelineEventCardProps) {
     return null
 }
 
-export default function EventTimeline({ events }: EventTimelineProps) {
-    if (events.length === 0) {
-        return (
-            <div className="empty-state">
-                <div className="empty-state__icon">◌</div>
-                <p className="empty-state__title">No events to display</p>
-            </div>
-        )
-    }
-
+export default function EventTimeline({ events, onTocEntries }: EventTimelineProps) {
     // Filter noisy/structural events before rendering
     const rendered = events.filter(e => {
         if (e.type === 'session_meta') return false
@@ -216,16 +222,67 @@ export default function EventTimeline({ events }: EventTimelineProps) {
         return true
     })
 
+    // Build TOC entries from user_message events
+    useEffect(() => {
+        if (!onTocEntries) return
+        let msgNum = 0
+        const entries: TocEntry[] = []
+        rendered.forEach((event, idx) => {
+            if (
+                event.type === 'event_msg' &&
+                (event as EventMsg).payload.type === 'user_message' &&
+                (event as EventMsg).payload.message
+            ) {
+                msgNum++
+                const msg = (event as EventMsg).payload.message!
+                entries.push({
+                    index: msgNum,
+                    eventIndex: idx,
+                    text: msg.length > 80 ? msg.slice(0, 80) + '…' : msg,
+                    anchor: `user-msg-${msgNum}`,
+                })
+            }
+        })
+        onTocEntries(entries)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [events])
+
+    if (rendered.length === 0) {
+        return (
+            <div className="empty-state">
+                <div className="empty-state__icon">◌</div>
+                <p className="empty-state__title">No events to display</p>
+            </div>
+        )
+    }
+
+    // Assign anchors and user-message numbers
+    let userMsgCount = 0
     return (
         <div className="timeline" role="list" aria-label="Session event timeline">
-            {rendered.map((event, idx) => (
-                <TimelineEventCard
-                    key={idx}
-                    event={event}
-                    index={idx}
-                    isLast={idx === rendered.length - 1}
-                />
-            ))}
+            {rendered.map((event, idx) => {
+                let anchor: string | undefined
+                let userMsgNum: number | undefined
+                if (
+                    event.type === 'event_msg' &&
+                    (event as EventMsg).payload.type === 'user_message' &&
+                    (event as EventMsg).payload.message
+                ) {
+                    userMsgCount++
+                    anchor = `user-msg-${userMsgCount}`
+                    userMsgNum = userMsgCount
+                }
+                return (
+                    <TimelineEventCard
+                        key={idx}
+                        event={event}
+                        index={idx}
+                        isLast={idx === rendered.length - 1}
+                        anchor={anchor}
+                        userMsgNum={userMsgNum}
+                    />
+                )
+            })}
         </div>
     )
 }

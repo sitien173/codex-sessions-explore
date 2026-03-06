@@ -5,6 +5,7 @@ import { initSearch, search as searchSessions } from '../lib/search'
 import SessionCard from '../components/SessionCard'
 import SearchBar from '../components/SearchBar'
 import FilterBar from '../components/FilterBar'
+import type { DateRange } from '../components/FilterBar'
 
 type SortKey = 'date' | 'size'
 
@@ -22,6 +23,37 @@ function SkeletonGrid() {
     )
 }
 
+interface SessionCardGridProps {
+    sessions: SessionEntry[]
+    startIdx: number
+    onOpen: (id: string) => void
+}
+
+function SessionCardGrid({ sessions, startIdx, onOpen }: SessionCardGridProps) {
+    return (
+        <div className="session-grid">
+            {sessions.map((session, i) => (
+                <div
+                    key={session.id}
+                    style={{ animationDelay: `${Math.min(startIdx + i, 20) * 30}ms` }}
+                >
+                    <SessionCard
+                        id={session.id}
+                        title={session.title}
+                        project={session.project}
+                        model={session.model}
+                        cli_version={session.cli_version}
+                        git_branch={session.git_branch}
+                        created_at={session.created_at}
+                        file_size_bytes={session.file_size_bytes}
+                        onClick={() => onOpen(session.id)}
+                    />
+                </div>
+            ))}
+        </div>
+    )
+}
+
 export default function SessionExplorer() {
     const navigate = useNavigate()
 
@@ -31,8 +63,12 @@ export default function SessionExplorer() {
     const [searchReady, setSearchReady] = useState(false)
 
     const [query, setQuery] = useState('')
-    const [project, setProject] = useState('')
+    const [selectedProjects, setSelectedProjects] = useState<string[]>([])
+    const [model, setModel] = useState('')
+    const [dateRange, setDateRange] = useState<DateRange>({ from: '', to: '' })
     const [sort, setSort] = useState<SortKey>('date')
+    const [grouped, setGrouped] = useState(true)   // group by project by default
+    const [showEmpty, setShowEmpty] = useState(false) // hide sessions with no user message by default
 
     // Load sessions + search index in parallel on mount
     useEffect(() => {
@@ -75,31 +111,67 @@ export default function SessionExplorer() {
     const filtered = useMemo(() => {
         let list = sessions
 
-        // Search filter
+        // Hide sessions that have no user message (empty sessions)
+        if (!showEmpty) {
+            list = list.filter(s => s.title !== '(no user message)')
+        }
+
+        // Full-text search
         if (matchIds !== null) {
             list = list.filter(s => matchIds.has(s.id))
         }
 
-        // Project filter
-        if (project) {
-            list = list.filter(s => s.project === project)
+        // Project filter (multi)
+        if (selectedProjects.length > 0) {
+            list = list.filter(s => selectedProjects.includes(s.project))
         }
 
-        // Sort
-        if (sort === 'date') {
-            list = [...list].sort((a, b) =>
+        // Model filter
+        if (model) {
+            list = list.filter(s => s.model === model)
+        }
+
+        // Date range filter
+        if (dateRange.from) {
+            const from = new Date(dateRange.from).getTime()
+            list = list.filter(s => new Date(s.created_at).getTime() >= from)
+        }
+        if (dateRange.to) {
+            const to = new Date(dateRange.to).getTime() + 86_400_000
+            list = list.filter(s => new Date(s.created_at).getTime() <= to)
+        }
+
+        // Sort within each group (or overall)
+        const sortFn = sort === 'date'
+            ? (a: SessionEntry, b: SessionEntry) =>
                 new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-            )
-        } else {
-            list = [...list].sort((a, b) => b.file_size_bytes - a.file_size_bytes)
-        }
+            : (a: SessionEntry, b: SessionEntry) =>
+                b.file_size_bytes - a.file_size_bytes
 
-        return list
-    }, [sessions, matchIds, project, sort])
+        return [...list].sort(sortFn)
+    }, [sessions, matchIds, selectedProjects, model, dateRange, sort, showEmpty])
+
+    /** When grouped: Map<projectName, SessionEntry[]> ordered by most-recent session */
+    const groups = useMemo(() => {
+        if (!grouped) return null
+        const map = new Map<string, SessionEntry[]>()
+        for (const s of filtered) {
+            const bucket = map.get(s.project) ?? []
+            bucket.push(s)
+            map.set(s.project, bucket)
+        }
+        // Sort groups by the date of their most-recent session
+        return Array.from(map.entries()).sort(
+            ([, a], [, b]) =>
+                new Date(b[0].created_at).getTime() - new Date(a[0].created_at).getTime()
+        )
+    }, [filtered, grouped])
 
     const handleOpen = useCallback((id: string) => {
         navigate(`/session/${id}`)
     }, [navigate])
+
+    const hasFilters = query || selectedProjects.length > 0 || model || dateRange.from || dateRange.to
 
     return (
         <div className="app-shell">
@@ -121,10 +193,18 @@ export default function SessionExplorer() {
                     <SearchBar value={query} onChange={setQuery} />
                     <FilterBar
                         sessions={sessions}
-                        onProjectChange={setProject}
-                        onSortChange={setSort}
+                        selectedProjects={selectedProjects}
+                        onProjectsChange={setSelectedProjects}
+                        currentModel={model}
+                        onModelChange={setModel}
+                        dateRange={dateRange}
+                        onDateRangeChange={setDateRange}
                         currentSort={sort}
-                        currentProject={project}
+                        onSortChange={setSort}
+                        grouped={grouped}
+                        onGroupedChange={setGrouped}
+                        showEmpty={showEmpty}
+                        onShowEmptyChange={setShowEmpty}
                     />
                 </div>
 
@@ -154,30 +234,56 @@ export default function SessionExplorer() {
                         <div className="results-meta">
                             <strong>{filtered.length}</strong>
                             {filtered.length === 1 ? ' session' : ' sessions'}
-                            {(query || project) && (
-                                <span> &mdash; {query && <span>"{query}"</span>}{query && project && ', '}{project && <span>project: {project}</span>}</span>
+                            {grouped && groups && (
+                                <span className="results-meta__groups">
+                                    {' '}across {groups.length} project{groups.length !== 1 ? 's' : ''}
+                                </span>
+                            )}
+                            {hasFilters && (
+                                <span>
+                                    {query && <span> &mdash; &ldquo;{query}&rdquo;</span>}
+                                    {selectedProjects.length > 0 && (
+                                        <span> · {selectedProjects.map(p => p.split(/[/\\]/).pop()).join(', ')}</span>
+                                    )}
+                                    {model && <span> · {model}</span>}
+                                    {(dateRange.from || dateRange.to) && (
+                                        <span> · {dateRange.from || '…'} → {dateRange.to || '…'}</span>
+                                    )}
+                                </span>
                             )}
                         </div>
-                        <div className="session-grid">
-                            {filtered.map((session, idx) => (
-                                <div
-                                    key={session.id}
-                                    style={{ animationDelay: `${Math.min(idx, 20) * 30}ms` }}
-                                >
-                                    <SessionCard
-                                        id={session.id}
-                                        title={session.title}
-                                        project={session.project}
-                                        model={session.model}
-                                        cli_version={session.cli_version}
-                                        git_branch={session.git_branch}
-                                        created_at={session.created_at}
-                                        file_size_bytes={session.file_size_bytes}
-                                        onClick={() => handleOpen(session.id)}
-                                    />
-                                </div>
-                            ))}
-                        </div>
+
+                        {/* ── Grouped view ── */}
+                        {grouped && groups ? (
+                            <div className="project-groups">
+                                {groups.map(([projectName, projectSessions], groupIdx) => (
+                                    <section
+                                        key={projectName}
+                                        className="project-group"
+                                        aria-label={`Project: ${projectName}`}
+                                    >
+                                        <div className="project-group__header">
+                                            <h2 className="project-group__name">{projectName}</h2>
+                                            <span className="project-group__count">
+                                                {projectSessions.length} session{projectSessions.length !== 1 ? 's' : ''}
+                                            </span>
+                                        </div>
+                                        <SessionCardGrid
+                                            sessions={projectSessions}
+                                            startIdx={groupIdx * 3}
+                                            onOpen={handleOpen}
+                                        />
+                                    </section>
+                                ))}
+                            </div>
+                        ) : (
+                            /* ── Flat view ── */
+                            <SessionCardGrid
+                                sessions={filtered}
+                                startIdx={0}
+                                onOpen={handleOpen}
+                            />
+                        )}
                     </>
                 )}
             </main>
