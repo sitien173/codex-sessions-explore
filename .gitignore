@@ -45,3 +45,12 @@ Thumbs.db
 .next
 out
 vitest.config.*.timestamp*
+
+# Codex sessions
+/sessions
+
+# Public assets
+/public
+
+# Local env overrides
+.env

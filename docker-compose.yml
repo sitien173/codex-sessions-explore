@@ -1,0 +1,37 @@
+services:
+
+  # ── Web server ─────────────────────────────────────────────────────────────
+  # Serves the built SPA, /_sessions/ JSONL proxy, and sessions.json
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      # Read the dynamically-generated index files from the indexer
+      - index_data:/app/data:ro
+      # Read JSONL session files for the /_sessions/ endpoint
+      - ${SESSIONS_DIR:-/data/share/.codex/sessions}:/sessions:ro
+    environment:
+      PORT: 3000
+    restart: unless-stopped
+    depends_on:
+      - indexer
+
+  # ── Indexer ────────────────────────────────────────────────────────────────
+  # Watches /sessions for new JSONL files, rebuilds sessions.json on change
+  indexer:
+    build:
+      context: .
+      target: indexer
+    volumes:
+      # Write generated index files to the shared volume
+      - index_data:/app/public
+      # Read JSONL session files (read-only)
+      - ${SESSIONS_DIR:-/data/share/.codex/sessions}:/sessions:ro
+    restart: unless-stopped
+
+volumes:
+  # Shared between indexer (writes) and web (reads)
+  index_data:

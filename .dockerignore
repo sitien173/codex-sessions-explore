@@ -1,0 +1,39 @@
+# Dependencies (reinstalled inside the image)
+node_modules
+
+# Build output (rebuilt inside the image)
+dist
+
+# Vite cache
+.vite
+
+# Generated index files (written at runtime by the indexer container)
+public/sessions.json
+public/search_index.json
+
+# Local session data (mounted as a volume at runtime)
+sessions
+data
+
+# Dev / editor artifacts
+.env
+.env.*
+!.env.example
+.vscode
+.idea
+*.log
+npm-debug.log*
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Docker files themselves (not needed inside the image)
+docker-compose.yml
+docker-compose*.yml
+Dockerfile*
+.dockerignore

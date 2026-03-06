@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "start": "concurrently --names \"index,vite\" --prefix-colors \"cyan,magenta\" \"npm:build-index:watch\" \"npm:dev\"",
     "build-index": "npx tsx scripts/build-index.ts --sessions-dir /data/share/.codex/sessions",
     "build-index:custom": "npx tsx scripts/build-index.ts",
     "build-index:watch": "npx tsx scripts/build-index.ts --sessions-dir /data/share/.codex/sessions --watch",
@@ -25,6 +26,7 @@
     "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
