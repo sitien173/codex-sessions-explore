@@ -1,0 +1,15 @@
+[
+  {
+    "id": "019cc119-e2a4-7e91-8641-b8baf45a9539",
+    "title": "generate docker compose file",
+    "project": "codex-sessions-manager",
+    "cwd": "/opt/codex-sessions-manager",
+    "model": "openai",
+    "cli_version": "0.98.0",
+    "git_branch": "pr-1",
+    "git_repo": "https://github.com/coramba/codex-sessions-manager.git",
+    "created_at": "2026-03-06T03:03:45.060Z",
+    "file": "sessions/2026/03/06/rollout-2026-03-06T03-03-45-019cc119-e2a4-7e91-8641-b8baf45a9539.jsonl",
+    "file_size_bytes": 739166
+  }
+]
