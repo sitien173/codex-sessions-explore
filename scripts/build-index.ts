@@ -32,7 +32,8 @@ interface SessionMetaPayload {
 }
 
 interface SessionEntry {
-    id: string
+    id: string           // UUID extracted from filename – always unique per file
+    session_meta_id: string  // session_meta.payload.id – may be shared across continuations
     title: string
     project: string
     cwd: string
@@ -54,6 +55,22 @@ interface SearchEntry {
 
 const ROOT = path.resolve(process.cwd())
 const PUBLIC_DIR = path.join(ROOT, 'public')
+
+/**
+ * Extract the UUID from a rollout filename.
+ * Pattern: rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl
+ * The UUID is the last hyphen-separated group(s) before the extension.
+ * e.g. rollout-2026-03-06T13-12-32-019cc1c6-b464-7c12-adc4-ac8ddaba8454.jsonl
+ *   => 019cc1c6-b464-7c12-adc4-ac8ddaba8454
+ */
+function extractFileUuid(filePath: string): string {
+    const base = path.basename(filePath, '.jsonl')
+    // Match the last UUID-shaped segment: 8-4-4-4-12 hex chars
+    const m = base.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)
+    if (m) return m[1]
+    // Fallback: use the whole filename as an id
+    return base
+}
 
 /** Resolve the sessions directory from CLI args or defaults */
 function resolveSessionsDir(): string {
@@ -208,8 +225,11 @@ async function main() {
             const cwdBasename = path.basename(meta.cwd)
             const stat = fs.statSync(filePath)
 
+            const fileUuid = extractFileUuid(filePath)
+
             const entry: SessionEntry = {
-                id: meta.id,
+                id: fileUuid,            // unique per file
+                session_meta_id: meta.id, // original session_meta id (may be shared)
                 title: title || '(no user message)',
                 project: cwdBasename,
                 cwd: meta.cwd,
@@ -223,7 +243,7 @@ async function main() {
             }
 
             sessions.push(entry)
-            searchIndex.push({ session_id: meta.id, text: entry.title })
+            searchIndex.push({ session_id: fileUuid, text: entry.title })
         }
 
         process.stdout.write(`  ✓ Processed ${Math.min(i + BATCH_SIZE, files.length)}/${files.length}\r`)

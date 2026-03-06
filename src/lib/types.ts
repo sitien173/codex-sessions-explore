@@ -79,7 +79,10 @@ export type RawEvent = SessionMetaEvent | EventMsg | ResponseItem | TurnContext 
 
 /** One entry in public/sessions.json */
 export interface SessionEntry {
+    /** UUID extracted from the JSONL filename — always unique per file */
     id: string
+    /** Original session_meta.payload.id — may be shared by continuation sessions */
+    session_meta_id: string
     title: string           // text of the first user_message
     project: string         // basename of cwd
     cwd: string
