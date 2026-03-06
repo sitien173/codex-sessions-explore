@@ -78,7 +78,10 @@ function resolveSessionsDir(): string {
     const args = process.argv.slice(2)
     const flagIdx = args.indexOf('--sessions-dir')
     if (flagIdx !== -1 && args[flagIdx + 1]) {
-        return path.resolve(args[flagIdx + 1])
+        // Normalize Windows-style backslashes → forward slashes so the path
+        // works correctly on Linux/macOS/WSL where '\' is not a separator.
+        const raw = args[flagIdx + 1].replace(/\\/g, '/')
+        return path.resolve(raw)
     }
     // Default: ./sessions subfolder
     const sessionsDefault = path.join(ROOT, 'sessions')
@@ -287,28 +290,45 @@ function watchMode(sessionsDir: string): void {
     }
 
     // Watch the entire sessions directory tree recursively
-    // fs.watch with recursive:true works on Windows (uses ReadDirectoryChangesW)
-    // and macOS (uses kqueue). On Linux, set up watchers per-directory instead.
+    // fs.watch with recursive:true works on Windows and macOS.
+    // On Linux it throws — fall back to watching individual year dirs.
+    let watcherStarted = false
     try {
         fs.watch(sessionsDir, { recursive: true }, (event, filename) => {
             if (filename && filename.endsWith('.jsonl')) {
                 scheduleRebuild(`${event}: ${filename}`)
             }
         })
+        watcherStarted = true
     } catch {
-        // Fallback for Linux where recursive watch isn't supported
-        console.warn('⚠️  Recursive watch not supported — watching top-level year dirs only.')
-        const entries = fs.readdirSync(sessionsDir, { withFileTypes: true })
-        const yearDirs = entries
-            .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name))
-            .map(d => path.join(sessionsDir, d.name))
+        // Recursive watch not supported (Linux) — try per-year-dir watchers
+    }
+
+    if (!watcherStarted) {
+        console.warn('⚠️  Recursive watch not supported — watching year sub-directories.')
+        let yearDirs: string[] = []
+        try {
+            yearDirs = fs.readdirSync(sessionsDir, { withFileTypes: true })
+                .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name))
+                .map(d => path.join(sessionsDir, d.name))
+        } catch (err) {
+            console.error(`❌ Cannot read sessions directory: ${sessionsDir}`)
+            console.error(`   ${(err as Error).message}`)
+            process.exit(1)
+        }
+
+        if (yearDirs.length === 0) {
+            console.warn('   No year sub-directories found yet — watcher will not fire until they appear.')
+        }
 
         for (const dir of yearDirs) {
-            fs.watch(dir, { recursive: true }, (event, filename) => {
-                if (filename && filename.endsWith('.jsonl')) {
-                    scheduleRebuild(`${event}: ${filename}`)
-                }
-            })
+            try {
+                fs.watch(dir, { recursive: true }, (event, filename) => {
+                    if (filename && filename.endsWith('.jsonl')) {
+                        scheduleRebuild(`${event}: ${filename}`)
+                    }
+                })
+            } catch { /* skip unreadable dir */ }
         }
     }
 }
