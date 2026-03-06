@@ -9,8 +9,9 @@
  *  3. Writes public/sessions.json and public/search_index.json
  *
  * Usage:
- *   npx tsx scripts/build-index.ts                      # looks in ./sessions
+ *   npx tsx scripts/build-index.ts                       # looks in ./sessions
  *   npx tsx scripts/build-index.ts --sessions-dir /path  # custom path
+ *   npx tsx scripts/build-index.ts --watch               # rebuild on new files
  */
 
 import * as fs from 'fs'
@@ -183,20 +184,16 @@ async function parseSessionFile(filePath: string): Promise<{ meta: SessionMetaPa
     })
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────────
+// ── Core build logic ───────────────────────────────────────────────────────────
 
-async function main() {
-    const sessionsDir = resolveSessionsDir()
-    console.log(`🔍 Scanning sessions from: ${sessionsDir}`)
+async function buildIndex(sessionsDir: string): Promise<void> {
+    const label = `[${new Date().toLocaleTimeString()}]`
+    console.log(`${label} 🔍 Scanning: ${sessionsDir}`)
 
     const files = findJsonlFiles(sessionsDir)
-    console.log(`📂 Found ${files.length} JSONL session files`)
-
     if (files.length === 0) {
-        console.error('❌ No JSONL files found.')
-        console.error('   Expected directory structure: YYYY/MM/DD/rollout-*.jsonl')
-        console.error('   Place sessions in ./sessions/ or pass --sessions-dir <path>')
-        process.exit(1)
+        console.warn(`${label} ⚠️  No JSONL files found – skipping write.`)
+        return
     }
 
     const sessions: SessionEntry[] = []
@@ -216,7 +213,6 @@ async function main() {
 
         for (const { filePath, meta, title } of results) {
             if (!meta) {
-                console.warn(`⚠️  No session_meta found: ${path.relative(ROOT, filePath)}`)
                 errors++
                 continue
             }
@@ -224,12 +220,11 @@ async function main() {
             const relPath = path.relative(ROOT, filePath).replace(/\\/g, '/')
             const cwdBasename = path.basename(meta.cwd)
             const stat = fs.statSync(filePath)
-
             const fileUuid = extractFileUuid(filePath)
 
             const entry: SessionEntry = {
-                id: fileUuid,            // unique per file
-                session_meta_id: meta.id, // original session_meta id (may be shared)
+                id: fileUuid,
+                session_meta_id: meta.id,
                 title: title || '(no user message)',
                 project: cwdBasename,
                 cwd: meta.cwd,
@@ -246,22 +241,93 @@ async function main() {
             searchIndex.push({ session_id: fileUuid, text: entry.title })
         }
 
-        process.stdout.write(`  ✓ Processed ${Math.min(i + BATCH_SIZE, files.length)}/${files.length}\r`)
+        process.stdout.write(`  ✓ ${Math.min(i + BATCH_SIZE, files.length)}/${files.length}\r`)
     }
 
-    console.log('')  // newline after progress
+    process.stdout.write('\n')
 
     // Sort sessions newest first
     sessions.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
-    // Write outputs
+    // Write outputs atomically (write to temp, rename to avoid partial reads)
     fs.mkdirSync(PUBLIC_DIR, { recursive: true })
-    fs.writeFileSync(path.join(PUBLIC_DIR, 'sessions.json'), JSON.stringify(sessions, null, 2))
-    fs.writeFileSync(path.join(PUBLIC_DIR, 'search_index.json'), JSON.stringify(searchIndex, null, 2))
 
-    console.log(`✅ Written public/sessions.json (${sessions.length} sessions)`)
-    console.log(`✅ Written public/search_index.json (${searchIndex.length} entries)`)
-    if (errors) console.warn(`⚠️  ${errors} files had issues (skipped)`)
+    const sessionsTmp = path.join(PUBLIC_DIR, 'sessions.json.tmp')
+    const searchTmp = path.join(PUBLIC_DIR, 'search_index.json.tmp')
+
+    fs.writeFileSync(sessionsTmp, JSON.stringify(sessions, null, 2))
+    fs.writeFileSync(searchTmp, JSON.stringify(searchIndex, null, 2))
+
+    fs.renameSync(sessionsTmp, path.join(PUBLIC_DIR, 'sessions.json'))
+    fs.renameSync(searchTmp, path.join(PUBLIC_DIR, 'search_index.json'))
+
+    console.log(`${label} ✅ ${sessions.length} sessions → public/sessions.json`)
+    if (errors) console.warn(`${label} ⚠️  ${errors} files skipped (no session_meta)`)
+}
+
+// ── Watch mode ─────────────────────────────────────────────────────────────────
+
+function watchMode(sessionsDir: string): void {
+    console.log(`👁  Watching for new sessions in: ${sessionsDir}`)
+    console.log(`    Press Ctrl+C to stop.\n`)
+
+    // Debounce: avoid re-running for every line written mid-session
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+    function scheduleRebuild(reason: string) {
+        if (debounceTimer) clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(async () => {
+            console.log(`\n🔄 Change detected (${reason}) – rebuilding…`)
+            try {
+                await buildIndex(sessionsDir)
+            } catch (err) {
+                console.error('Error during rebuild:', err)
+            }
+        }, 1500)  // wait 1.5 s after last event before rebuilding
+    }
+
+    // Watch the entire sessions directory tree recursively
+    // fs.watch with recursive:true works on Windows (uses ReadDirectoryChangesW)
+    // and macOS (uses kqueue). On Linux, set up watchers per-directory instead.
+    try {
+        fs.watch(sessionsDir, { recursive: true }, (event, filename) => {
+            if (filename && filename.endsWith('.jsonl')) {
+                scheduleRebuild(`${event}: ${filename}`)
+            }
+        })
+    } catch {
+        // Fallback for Linux where recursive watch isn't supported
+        console.warn('⚠️  Recursive watch not supported — watching top-level year dirs only.')
+        const entries = fs.readdirSync(sessionsDir, { withFileTypes: true })
+        const yearDirs = entries
+            .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name))
+            .map(d => path.join(sessionsDir, d.name))
+
+        for (const dir of yearDirs) {
+            fs.watch(dir, { recursive: true }, (event, filename) => {
+                if (filename && filename.endsWith('.jsonl')) {
+                    scheduleRebuild(`${event}: ${filename}`)
+                }
+            })
+        }
+    }
+}
+
+// ── Entry point ────────────────────────────────────────────────────────────────
+
+async function main() {
+    const args = process.argv.slice(2)
+    const isWatch = args.includes('--watch')
+    const sessionsDir = resolveSessionsDir()
+
+    // Always do an initial build
+    await buildIndex(sessionsDir)
+
+    if (isWatch) {
+        watchMode(sessionsDir)
+        // Keep process alive
+        process.stdin.resume()
+    }
 }
 
 main().catch((err) => {

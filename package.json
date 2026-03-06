@@ -6,6 +6,7 @@
   "scripts": {
     "build-index": "npx tsx scripts/build-index.ts --sessions-dir \"Y:\\.codex\\sessions\"",
     "build-index:custom": "npx tsx scripts/build-index.ts",
+    "build-index:watch": "npx tsx scripts/build-index.ts --sessions-dir \"Y:\\.codex\\sessions\" --watch",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview"

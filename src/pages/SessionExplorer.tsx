@@ -73,8 +73,9 @@ export default function SessionExplorer() {
     // Load sessions + search index in parallel on mount
     useEffect(() => {
         let cancelled = false
+        let lastModified = ''
 
-        async function load() {
+        async function load(silent = false) {
             try {
                 const [sessionsRes, searchRes] = await Promise.all([
                     fetch('/sessions.json'),
@@ -84,6 +85,9 @@ export default function SessionExplorer() {
                 if (!sessionsRes.ok) throw new Error(`Failed to load sessions: ${sessionsRes.status}`)
                 if (!searchRes.ok) throw new Error(`Failed to load search index: ${searchRes.status}`)
 
+                // Track Last-Modified for polling
+                lastModified = sessionsRes.headers.get('Last-Modified') ?? ''
+
                 const sessionsData: SessionEntry[] = await sessionsRes.json()
                 const searchData: SearchEntry[] = await searchRes.json()
 
@@ -92,15 +96,34 @@ export default function SessionExplorer() {
                 setSessions(sessionsData)
                 await initSearch(searchData)
                 setSearchReady(true)
+                if (!silent) setLoading(false)
             } catch (e) {
-                if (!cancelled) setError((e as Error).message)
-            } finally {
-                if (!cancelled) setLoading(false)
+                if (!cancelled && !silent) {
+                    setError((e as Error).message)
+                    setLoading(false)
+                }
             }
         }
 
         load()
-        return () => { cancelled = true }
+
+        // Poll every 10 s for new sessions (when build-index --watch is running)
+        const pollId = setInterval(async () => {
+            if (cancelled) return
+            try {
+                const res = await fetch('/sessions.json', { method: 'HEAD' })
+                const lm = res.headers.get('Last-Modified') ?? ''
+                if (lm && lm !== lastModified) {
+                    console.log('[SessionExplorer] sessions.json changed – reloading…')
+                    await load(true)
+                }
+            } catch { /* network hiccup, ignore */ }
+        }, 10_000)
+
+        return () => {
+            cancelled = true
+            clearInterval(pollId)
+        }
     }, [])
 
     const matchIds = useMemo(() => {
